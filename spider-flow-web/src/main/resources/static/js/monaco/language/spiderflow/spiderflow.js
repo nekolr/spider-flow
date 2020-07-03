@@ -47,10 +47,17 @@ Span.prototype.toString = function(){
 }
 function throwError(){
     var message = '';
+    var span;
     for(var i=0,len = arguments.length;i<len;i++){
-        message += arguments[i] + ' ';
+        var value = arguments[i];
+        if(value instanceof Span){
+            span = value
+        }else{
+            message += value + ' ';
+        }
+
     }
-    throw new Error(message);
+    throw {message : message, span : span};
 }
 function CharacterStream(source,start,end){
     this.index = start === undefined ? 0 : start;
@@ -65,6 +72,9 @@ CharacterStream.prototype.consume = function(){
     return this.source.charAt(this.index++);
 }
 CharacterStream.prototype.match = function(needle,consume){
+    if (typeof needle !== 'string') {
+        needle = needle.literal;
+    }
     var needleLength = needle.length;
     if(needleLength + this.index > this.end){
         return false;
@@ -138,66 +148,69 @@ Token.prototype.getSpan = function(){
     return this.span;
 }
 Token.prototype.getText = function(){
-    return this.text;
+    return this.span.getText();
 }
 var TokenType = {
-    TextBlock : 0,
-    Period : '.',
-    Comma : ',',
-    Semicolon : ';',
-    Colon : ':',
-    Plus : '+',
-    Minus : '-',
-    Asterisk : '*',
-    ForwardSlash : '/',
-    PostSlash : '\\',
-    Percentage : '%',
-    LeftParantheses : '(',
-    RightParantheses : ')',
-    LeftBracket : '[',
-    RightBracket : ']',
-    LeftCurly : '{',
-    RightCurly : 12,
-    Less : '<',
-    Greater : '>',
-    LessEqual : '<=',
-    GreaterEqual : '>=',
-    Equal : '==',
-    NotEqual : '!=',
-    Assignment : '=',
-    And : '&&',
-    Or : '||',
-    Xor : '^',
-    Not : '!',
-    Questionmark : '?',
-    DoubleQuote : '"',
-    SingleQuote : "'",
-    BooleanLiteral : 1,
-    DoubleLiteral : 2,
-    FloatLiteral : 3,
-    LongLiteral : 4,
-    IntegerLiteral : 5,
-    ShortLiteral : 6,
-    ByteLiteral : 7,
-    CharacterLiteral : 8,
-    StringLiteral : 9,
-    NullLiteral : 10,
-    Identifier : 11
+    TextBlock : {error:'一个文本'},
+    Period : {literal:'.', error: '.'},
+    Lambda : {literal:'->', error:'->'},
+    Comma : {literal:',', error: ','},
+    Semicolon : {literal:';', error: ';'},
+    Colon : {literal:':', error: ':'},
+    Plus : {literal:'+', error: '+'},
+    Minus : {literal:'-', error: '-'},
+    Asterisk : {literal:'*', error: '*'},
+    ForwardSlash : {literal:'/', error: '/'},
+    PostSlash : {literal:'\\', error: '\\'},
+    Percentage : {literal:'%', error: '%'},
+    LeftParantheses : {literal:'(', error: '('},
+    RightParantheses : {literal:')', error: ')'},
+    LeftBracket : {literal:'[', error: '['},
+    RightBracket : {literal:']', error: ']'},
+    LeftCurly : {literal:'{', error: '{'},
+    RightCurly : {error:'}'},// 特殊待遇！
+    Less : {literal:'<', error: '<'},
+    Greater : {literal:'>', error: '>'},
+    LessEqual : {literal:'<=', error: '<='},
+    GreaterEqual : {literal:'>=', error: '>='},
+    Equal : {literal:'==', error: '=='},
+    NotEqual : {literal:'!=', error: '!='},
+    Assignment : {literal:'=', error: '='},
+    And : {literal:'&&', error: '&&'},
+    Or : {literal:'||', error: '||'},
+    Xor : {literal:'^', error: '^'},
+    Not : {literal:'!', error: '!'},
+    Questionmark : {literal:'?', error: '?'},
+    DoubleQuote : {literal:'"', error: '"'},
+    SingleQuote : {literal:'\'', error: '\''},
+    BooleanLiteral : {error:'true 或 false'},
+    DoubleLiteral : {error:'一个 double 类型数值'},
+    FloatLiteral : {error:'一个 float 类型数值'},
+    LongLiteral : {error:'一个 long 类型数值'},
+    IntegerLiteral : {error:'一个 int 类型数值'},
+    ShortLiteral : {error:'一个 short 类型数值'},
+    ByteLiteral : {error:'一个 byte 类型数据'},
+    CharacterLiteral : {error:'一个 char 类型数据'},
+    StringLiteral : {error:'一个 字符串'},
+    NullLiteral : {error:'null'},
+    Identifier : {error:'标识符'}
 }
-var tokenTypeValues = Object.getOwnPropertyNames(TokenType);
+var tokenTypeValues = Object.getOwnPropertyNames(TokenType).map(e=>TokenType[e]);
 TokenType.getSortedValues = function(){
     if(this.values){
         return this.values;
     }
     this.values = tokenTypeValues.sort(function(o1,o2){
-        var v1 = TokenType[o1];
-        var v2 = TokenType[o2];
-        var t1 = typeof v1;
-        var t2 = typeof v2;
-        if (t1 != 'string' && o2.literal != 'string') return 0;
-        if (t1 != 'string' && t2 == 'string') return 1;
-        if (t1 == 'string' && t2 != 'string') return -1;
-        return v2.length - v1.length;
+        if (!o1.literal && !o2.literal) {
+            return 0;
+        }
+        if (!o1.literal && !!o2.literal) {
+            return 1;
+        }
+        if (!!o1.literal && !o2.literal) {
+            return -1;
+        }
+        return o2.literal.length - o1.literal.length;
     })
     return this.values;
 }
@@ -217,7 +230,7 @@ TokenStream.prototype.getToken = function(consume){
     return token;
 }
 function Tokenizer(){}
-Tokenizer.prototype.tokenize = function(source){
+Tokenizer.prototype.tokenize = function(source,throwException){
     var tokens = [];
     if (source.length > 0){
         try{
@@ -247,7 +260,10 @@ Tokenizer.prototype.tokenize = function(source){
 
                     }while(isContinue);
                     if(re != null){
-                        throw re;
+                        if(throwException){
+                            throw re;
+                        }
+                        return tokens;
                     }
                     stream.startSpan();
                 } else {
@@ -256,7 +272,9 @@ Tokenizer.prototype.tokenize = function(source){
             }
             if (!stream.isSpanEmpty()) tokens.push(new Token(TokenType.TextBlock, stream.endSpan()));
         }catch(ex){
-            //console.log(ex);
+            if(throwException){
+                throw ex;
+            }
         }
     }
     return tokens;
@@ -364,13 +382,12 @@ Tokenizer.prototype.tokenizeCodeSpan = function(span){
         var sortedValues = TokenType.getSortedValues();
         for (var i=0,len = sortedValues.length;i<len;i++) {
             var t = sortedValues[i]
-            var literal = TokenType[t];
-            if (typeof literal == 'string') {
-                if (stream.match(literal, true)) {
+            if (!!t.literal) {
+                if (stream.match(t.literal, true)) {
                     if(t == TokenType.LeftCurly){
                         leftCount ++;
                     }
-                    tokens.push(new Token(literal, new Span(source, stream.getPosition() - literal.length, stream.getPosition())));
+                    tokens.push(new Token(t.literal, new Span(source, stream.getPosition() - t.literal.length, stream.getPosition())));
                     contineOuter = true;
                     break;
                 }
@@ -435,7 +452,56 @@ SpiderFlowGrammer.prototype.init = function(){
             }
         }
         this.clazz.resp = this.clazz.SpiderResponse;
-        this.clazz.resp.sortText = '___';
+        this.clazz.resp.kind = 'Constant';
+        this.clazz.resp.sortText = ' ~';
+        var lambdasArrayFunctions = [];
+        var makeLambdaFunction = function (name, returnType, fullName, comment, insertText) {
+            return {
+                name : name,
+                kind: 'Function',
+                returnType : returnType,
+                parameters : [{
+                    name : 'call',
+                    type : 'function'
+                }],
+                sortText: fullName.replace(/([()])/g, '~$1'),
+                fullName : fullName,
+                comment : comment,
+                insertText : insertText
+            };
+        }
+        lambdasArrayFunctions.push(makeLambdaFunction('filter', 'List', 'filter(e->expression)', '过滤列表元素，返回符合条件的数据', 'filter(e->${1:true})'));
+        lambdasArrayFunctions.push(makeLambdaFunction('filter', 'List', 'filter((e,i)->expression)', '过滤列表元素，返回符合条件的数据', 'filter((e,i)->${1:true})'));
+        lambdasArrayFunctions.push(makeLambdaFunction('map', 'List', 'map(e->expression)', '将列表中的元素转为其他类型数据', 'map(e->${1:e})'));
+        lambdasArrayFunctions.push(makeLambdaFunction('map', 'List', 'map((e,i)->expression)', '将列表中的元素转为其他类型数据', 'map((e,i)->${1:e})'));
+        lambdasArrayFunctions.push(makeLambdaFunction('reduce', 'Object', 'reduce((a,b)->expression)', '将列表中的元素整合为一个数据', 'reduce((a,b)->${1:a+b})'));
+        lambdasArrayFunctions.push(makeLambdaFunction('sort', 'List', 'sort((a,b)->expression)', '将列表中的元素进行排序', 'sort((a,b)->${1:a-b})'));
+        lambdasArrayFunctions.push(makeLambdaFunction('distinct', 'List', 'distinct(e->expression)', '将列表中的元素按条件去重', 'sort(e->${1:e})'));
+        lambdasArrayFunctions.push(makeLambdaFunction('distinct', 'List', 'distinct((e,i)->expression)', '将列表中的元素按条件去重', 'distinct((e,i)->${1:e})'));
+        lambdasArrayFunctions.push(makeLambdaFunction('every', 'boolean', 'every(e->expression)', '是否每个元素都符合条件', 'every(e->${1:true})'));
+        lambdasArrayFunctions.push(makeLambdaFunction('every', 'boolean', 'every((e,i)->expression)', '是否每个元素都符合条件', 'every((e,i)->${1:true})'));
+        lambdasArrayFunctions.push(makeLambdaFunction('some', 'boolean', 'some(e->expression)', '是否至少有一个元素都符合条件', 'some(e->${1:true})'));
+        lambdasArrayFunctions.push(makeLambdaFunction('some', 'boolean', 'some((e,i)->expression)', '是否至少有一个元素都符合条件', 'some((e,i)->${1:true})'));
+        // var types = new Set()
+        // for(var k in this.clazz){
+        //     this.clazz[k].methods.forEach(e=>types.add(e.returnType))
+        // }
+        // console.log(Array.from(types))
+        var _this = this;
+        var pushMethod = function (type, lambdaFunction) {
+            if (!_this.clazz[type]) {
+                _this.clazz[type] = {methods:[],attributes:[]}
+            }
+            _this.clazz[type].methods.push(lambdaFunction)
+        }
+        for (let i = 0; i < lambdasArrayFunctions.length; i++) {
+            pushMethod('List', lambdasArrayFunctions[i])
+            pushMethod('Set', lambdasArrayFunctions[i])
+            pushMethod('Elements', lambdasArrayFunctions[i])
+            pushMethod('String[]', lambdasArrayFunctions[i])
+            pushMethod('Object[]', lambdasArrayFunctions[i])
+        }
+        delete this.clazz.void;
     }
 }
 SpiderFlowGrammer.prototype.findHoverSuggestion = function(inputs){
@@ -486,6 +552,12 @@ SpiderFlowGrammer.prototype.findSuggestions = function(inputs){
         if(!target){
             target = this.clazz[input];
         }else{
+            for(var j=0;j<target.attributes.length;j++){
+                if(target.attributes[j].name == input){
+                    target = this.clazz[target.attributes[j].type];
+                    break;
+                }
+            }
             for(var j=0;j<target.methods.length;j++){
                 if(target.methods[j].name == input){
                     target = this.clazz[target.methods[j].returnType];
@@ -500,19 +572,19 @@ SpiderFlowGrammer.prototype.findSuggestions = function(inputs){
             var attribute = target.attributes[j];
             suggestions.push({
                 label: attribute.name,
-                kind: monaco.languages.CompletionItemKind.Field,
+                kind: monaco.languages.CompletionItemKind[attribute.kind] || monaco.languages.CompletionItemKind.Field,
                 detail : attribute.type + ":" + attribute.name,
                 insertText: attribute.name,
-                sortText : '__'
+                sortText : ' ~~' + attribute.name
                 //insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
             })
         }
         for(var j=0;j<target.methods.length;j++){
             var method = target.methods[j];
             suggestions.push({
-                sortText : method.fullName,
+                sortText : method.sortText || method.fullName,
                 label: method.fullName,
-                kind: monaco.languages.CompletionItemKind.Method,
+                kind: monaco.languages.CompletionItemKind[method.kind] || monaco.languages.CompletionItemKind.Method,
                 detail : method.comment,
                 insertText: method.insertText,
                 insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet
@@ -524,7 +596,7 @@ SpiderFlowGrammer.prototype.findSuggestions = function(inputs){
             var value = this.clazz[key];
             if(/^[a-z]+$/.test(key.charAt(0))){
                 suggestions.push({
-                    sortText : value.sortText || 'ZZZZ',
+                    sortText : value.sortText || ' ~' + key,
                     label: key,
                     kind: monaco.languages.CompletionItemKind.Variable,
                     insertText: key,
@@ -537,7 +609,7 @@ SpiderFlowGrammer.prototype.findSuggestions = function(inputs){
         for(var j=0;j<target.methods.length;j++){
             var method = target.methods[j];
             suggestions.push({
-                sortText : 'ZZZZZZZZ____',
+                sortText : '~~~~~~' + method.fullName,
                 label: method.fullName,
                 kind: monaco.languages.CompletionItemKind.Method,
                 detail : method.comment,
@@ -626,7 +698,7 @@ require(['vs/editor/editor.main'], function() {
                 while(stream.hasMore()){
                     var token = stream.getToken(true);
                     var tokenType = token.getTokenType();
-                    if(tokenType == TokenType.LeftParantheses || tokenType == TokenType.LeftBracket){
+                    if(tokenType == TokenType.LeftParantheses || tokenType == TokenType.LeftBracket || tokenType == TokenType.Lambda){
                         array = [];
                         stack.push(array);
                     }else if(tokenType == TokenType.RightParantheses || tokenType == TokenType.RightBracket){
